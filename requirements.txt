@@ -1,2 +1,9 @@
 flask
 gunicorn
+pymongo
+cryptography
+language-tool-python
+werkzeug
+google-generativeai
+requests
+python-dotenv
