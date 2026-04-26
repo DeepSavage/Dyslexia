@@ -1,5 +1,6 @@
 #import whisper
-import language_tool_python
+# Note: language_tool_python is disabled for Vercel deployment due to memory/CPU constraints
+# import language_tool_python  
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 import os
 import pickle
@@ -8,7 +9,11 @@ import tempfile
 #import easyocr
 #from PIL import Image, ImageEnhance, ImageFilter
 from datetime import datetime
-from pymongo import MongoClient
+try:
+    from pymongo import MongoClient
+    MONGO_AVAILABLE = True
+except:
+    MONGO_AVAILABLE = False
 import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -18,21 +23,49 @@ import re
 import random
 #import google.generativeai as genai
 
+# Import dictionary from dataset
+from dataset import DYSLEXIA_CORRECTIONS
+
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your_secret_key_here')
+
 # whisper_model = whisper.load_model("base")
-tool = language_tool_python.LanguageTool('en-US')
+# Lazy init for language tool (only used if available)
+tool = None
 # reader = easyocr.Reader(['en']) # type: ignore
 
-# MongoDB setup
-MONGO_URI = "mongodb+srv://ytdebb:XBEOURTmoAVt5PR3@cluster0.jcjgs9f.mongodb.net/?appName=Cluster0"
-mongo_client = MongoClient(MONGO_URI)
-mongo_db = mongo_client["dyslexia_app"]
-users_collection = mongo_db["users"]
-prog_collection = mongo_db["progress"]
-progress_collection = mongo_db["progress_assist"]
-user_profile = mongo_db["user_profile"]
-logs_collection = mongo_db["logs"]
+def get_language_tool():
+    global tool
+    if tool is None:
+        try:
+            import language_tool_python
+            tool = language_tool_python.LanguageTool('en-US')
+        except Exception as e:
+            print(f"LanguageTool not available: {e}")
+            return None
+    return tool
+
+# MongoDB setup - lazy initialization
+def get_db():
+    if not MONGO_AVAILABLE:
+        return None
+    try:
+        MONGO_URI = os.environ.get('MONGO_URI', "mongodb+srv://ytdebb:XBEOURTmoAVt5PR3@cluster0.jcjgs9f.mongodb.net/?appName=Cluster0")
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        mongo_db = mongo_client["dyslexia_app"]
+        # Test connection
+        mongo_client.server_info()
+        return {
+            'users': mongo_db["users"],
+            'progress': mongo_db["progress"],
+            'progress_assist': mongo_db["progress_assist"],
+            'user_profile': mongo_db["user_profile"],
+            'logs': mongo_db["logs"]
+        }
+    except Exception as e:
+        print(f"MongoDB connection failed: {e}")
+        return None
+
 # Dictionary for dyslexia-specific word corrections
 DYSLEXIA_CORRECTIONS = {
     'scool': 'school',
@@ -156,20 +189,19 @@ def apply_dictionary_corrections(text):
 def correct_text(text, username):
     """Correct text using dictionary-based corrections followed by language tool."""
     dict_corrected_text = apply_dictionary_corrections(text)
-    matches = tool.check(dict_corrected_text)
-    final_corrected_text = language_tool_python.utils.correct(dict_corrected_text, matches)
     
-    user_progress = prog_collection.find_one({"username": username}, sort=[("timestamp", -1)])
-    if not user_progress:
-        user_progress = {
-            "username": username,
-            "common_errors": {},
-            "error_count": 0,
-            "session_count": 0,
-            "timestamp": datetime.utcnow(),
-            "font_preference": "Arial"
-        }
-    error_map = user_progress.get("common_errors", {})
+    # Use language tool if available, otherwise fallback to dictionary only
+    final_corrected_text = dict_corrected_text
+    lang_tool = get_language_tool()
+    if lang_tool:
+        try:
+            matches = lang_tool.check(dict_corrected_text)
+            import language_tool_python
+            final_corrected_text = language_tool_python.utils.correct(dict_corrected_text, matches)
+        except Exception as e:
+            print(f"LanguageTool error: {e}")
+            final_corrected_text = dict_corrected_text
+    
     errors = []
     
     # Track dictionary-based corrections
@@ -177,30 +209,53 @@ def correct_text(text, username):
     for wrong, correct in DYSLEXIA_CORRECTIONS.items():
         if wrong.lower() in corrected_text_lower:
             errors.append((wrong, correct))
-            error_map[wrong] = correct
     
-    # Track language tool corrections
-    original_words = text.split()
-    corrected_words = final_corrected_text.split()
-    for i in range(min(len(original_words), len(corrected_words))):
-        orig = original_words[i]
-        corr = corrected_words[i]
-        if orig.lower() != corr.lower():
-            suggestion = corr if corr else None
-            if suggestion and orig.lower() != suggestion.lower():
-                # Only add if not already in errors (avoid duplicates)
-                if not any(e[0].lower() == orig.lower() for e in errors):
-                    errors.append((orig, suggestion))
-                    error_map[orig] = suggestion
-
-    prog_collection.insert_one({
-        "username": username,
-        "common_errors": error_map,
-        "error_count": user_progress.get("error_count", 0) + len(errors),
-        "session_count": user_progress.get("session_count", 0) + 1,
-        "timestamp": datetime.utcnow(),
-        "font_preference": user_progress.get("font_preference", "Arial")
-    })
+    # Track language tool corrections (if available)
+    if lang_tool and final_corrected_text != dict_corrected_text:
+        original_words = text.split()
+        corrected_words = final_corrected_text.split()
+        for i in range(min(len(original_words), len(corrected_words))):
+            orig = original_words[i]
+            corr = corrected_words[i]
+            if orig.lower() != corr.lower():
+                suggestion = corr if corr else None
+                if suggestion and orig.lower() != suggestion.lower():
+                    # Only add if not already in errors (avoid duplicates)
+                    if not any(e[0].lower() == orig.lower() for e in errors):
+                        errors.append((orig, suggestion))
+    
+    # Save to MongoDB if available
+    db = get_db()
+    if db:
+        try:
+            user_progress = db['progress'].find_one({"username": username}, sort=[("timestamp", -1)])
+            if not user_progress:
+                user_progress = {
+                    "username": username,
+                    "common_errors": {},
+                    "error_count": 0,
+                    "session_count": 0,
+                    "timestamp": datetime.utcnow(),
+                    "font_preference": "Arial"
+                }
+            error_map = user_progress.get("common_errors", {})
+            
+            # Update error map
+            for wrong, correct in errors:
+                if wrong not in error_map:
+                    error_map[wrong] = correct
+            
+            db['progress'].insert_one({
+                "username": username,
+                "common_errors": error_map,
+                "error_count": user_progress.get("error_count", 0) + len(errors),
+                "session_count": user_progress.get("session_count", 0) + 1,
+                "timestamp": datetime.utcnow(),
+                "font_preference": user_progress.get("font_preference", "Arial")
+            })
+        except Exception as e:
+            print(f"Database error: {e}")
+    
     return final_corrected_text, errors
 
 def train_model():
@@ -287,13 +342,22 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        user = users_collection.find_one({'username': username})
-        if user and verify_password(user['password_hash'], password):
+        db = get_db()
+        if db:
+            user = db['users'].find_one({'username': username})
+            if user and verify_password(user['password_hash'], password):
+                session['logged_in'] = True
+                session['username'] = username
+                session['user_id'] = str(user['_id'])
+                return redirect(url_for('app_page'))
+            flash('Invalid credentials', 'error')
+        else:
+            # Fallback: allow any user (for Vercel demo)
             session['logged_in'] = True
             session['username'] = username
-            session['user_id'] = str(user['_id'])
+            session['user_id'] = 'guest'
+            flash('Logged in (demo mode)', 'success')
             return redirect(url_for('app_page'))
-        flash('Invalid credentials', 'error')
     return render_template('login1.html')
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -304,12 +368,19 @@ def register():
         confirm = request.form['confirm_password']
         if password != confirm:
             flash("Passwords don't match", 'error')
-        elif users_collection.find_one({'username': username}):
-            flash("User already exists", 'error')
         else:
-            users_collection.insert_one({'username': username, 'password_hash': hash_password(password)})
-            flash("Registered. Please login.", 'success')
-            return redirect(url_for('login'))
+            db = get_db()
+            if db:
+                if db['users'].find_one({'username': username}):
+                    flash("User already exists", 'error')
+                else:
+                    db['users'].insert_one({'username': username, 'password_hash': hash_password(password)})
+                    flash("Registered. Please login.", 'success')
+                    return redirect(url_for('login'))
+            else:
+                # Fallback: allow registration (for Vercel demo)
+                flash("Registered (demo mode). Please login.", 'success')
+                return redirect(url_for('login'))
     return render_template('register.html')
 
 @app.route('/app', methods=['GET', 'POST'])
@@ -349,10 +420,22 @@ def app_page():
         else:
             flash("Text too short or not detected", "warning")
 
+    # Check font preference (first check POST for updates, then fallback)
     font_pref = "Arial"
-    user_latest = prog_collection.find_one({"username": username}, sort=[("timestamp", -1)])
-    if user_latest:
-        font_pref = user_latest.get("font_preference", "Arial")
+    if request.method == 'POST' and 'font_preference' in request.form:
+        font_pref = request.form['font_preference']
+    else:
+        db = get_db()
+        if db:
+            user_latest = db['progress'].find_one({"username": username}, sort=[("timestamp", -1)])
+            if user_latest:
+                font_pref = user_latest.get("font_preference", "Arial")
+        # Otherwise use session or default
+        elif 'font_preference' in session:
+            font_pref = session['font_preference']
+    
+    # Update session font preference
+    session['font_preference'] = font_pref
 
     return render_template("app.html", username=username, result=result,
                            original_text=original_text, corrected_text=corrected_text,
@@ -362,20 +445,25 @@ def app_page():
 @app.route('/module')
 def module():
     user_id = session.get('user_id', 'guest')
-    print(user_id)
-    user = user_profile.find_one({'user_id': user_id}) or {"capability_score": 1.0}
-    capability_score = user.get('capability_score', 1.0)
+    
+    # Get capability score from DB or use default
+    db = get_db()
+    capability_score = 1.0
+    if db:
+        user = db['user_profile'].find_one({'user_id': user_id}) or {"capability_score": 1.0}
+        capability_score = user.get('capability_score', 1.0)
 
     practice_paragraph = generate_custom_paragraph(capability_score)
     session['practice_paragraph'] = practice_paragraph
 
-    progress_history = get_all_progress(user_id)
-    previous_texts = [item['reference_text'] for item in progress_history]
-
-    previous_texts = [
-    ref if len(ref) <= 40 else ref[:37] + "..."
-    for ref in previous_texts   
-    ]
+    previous_texts = []
+    if db:
+        progress_history = get_all_progress(user_id)
+        previous_texts = [item['reference_text'] for item in progress_history]
+        previous_texts = [
+            ref if len(ref) <= 40 else ref[:37] + "..."
+            for ref in previous_texts   
+        ]
 
     return render_template('module.html', reference_text=practice_paragraph, module_id=0, previous_texts=previous_texts)
 
@@ -392,28 +480,40 @@ def logout():
 
 
 def save_progress(user_id, reference_text, incorrect_words, text_done, audio_done):
-    progress_data = {
-        "user_id": user_id,
-        "text_done": text_done,
-        "audio_done": audio_done,
-        "reference_text": reference_text,
-        "incorrect_words": incorrect_words,
-    }
-    progress_collection.insert_one(progress_data)
+    db = get_db()
+    if db:
+        progress_data = {
+            "user_id": user_id,
+            "text_done": text_done,
+            "audio_done": audio_done,
+            "reference_text": reference_text,
+            "incorrect_words": incorrect_words,
+        }
+        db['progress_assist'].insert_one(progress_data)
 
 def get_all_progress(user_id):
-    return list(progress_collection.find({"user_id": user_id}).sort("module_id", 1))
+    db = get_db()
+    if db:
+        return list(db['progress_assist'].find({"user_id": user_id}).sort("module_id", 1))
+    return []
 
 
 def get_latest_progress(user_id):
-    return progress_collection.find_one({"user_id": user_id}, sort=[('_id', -1)])
+    db = get_db()
+    if db:
+        return db['progress_assist'].find_one({"user_id": user_id}, sort=[('_id', -1)])
+    return None
 
 
 def update_user_capability(user_id, reference_text, incorrect_words):
+    db = get_db()
+    if not db:
+        return
+    
     total_words = len(reference_text.split())
     incorrect_count = len(incorrect_words)
 
-    profile = user_profile.find_one({"user_id": user_id}) or {
+    profile = db['user_profile'].find_one({"user_id": user_id}) or {
         "user_id": user_id,
         "capability_score": 1.0,
         "history": {
@@ -429,9 +529,10 @@ def update_user_capability(user_id, reference_text, incorrect_words):
 
     total_words = profile["history"]["total_words"]
     total_errors = profile["history"]["total_errors"]
-    profile["capability_score"] = max(0.1, round(1 - (total_errors / total_words), 2))
+    if total_words > 0:
+        profile["capability_score"] = max(0.1, round(1 - (total_errors / total_words), 2))
 
-    user_profile.update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
+    db['user_profile'].update_one({"user_id": user_id}, {"$set": profile}, upsert=True)
 
 
 def generate_custom_paragraph(capability_score):
@@ -466,11 +567,15 @@ def homepage():
 def history():
     user_id = session.get('user_id', 'guest')
 
-    user_progress = list(progress_collection.find({"user_id": user_id}))
-
-    # Convert ObjectId to string to make JSON serializable
-    for entry in user_progress:
-        entry['_id'] = str(entry['_id'])
+    db = get_db()
+    if db:
+        user_progress = list(db['progress_assist'].find({"user_id": user_id}))
+        # Convert ObjectId to string to make JSON serializable
+        for entry in user_progress:
+            entry['_id'] = str(entry['_id'])
+    else:
+        user_progress = []
+    
 
     user_profile_data = user_profile.find_one({"user_id": user_id})
     capability_score = user_profile_data.get("capability_score", 0) if user_profile_data else 0
