@@ -480,26 +480,30 @@ def history():
     else:
         user_progress = []
     
-
-    user_profile_data = user_profile.find_one({"user_id": user_id})
-    capability_score = user_profile_data.get("capability_score", 0) if user_profile_data else 0
-
-    docs = list(progress_collection.find({"user_id": user_id}))  # Convert cursor to list
-
-
-# Temporary list to store all correct words (in order of appearance)
+    # Get capability score
+    capability_score = 0
+    if db:
+        user_profile_data = db['user_profile'].find_one({"user_id": user_id})
+        capability_score = user_profile_data.get("capability_score", 0) if user_profile_data else 0
+    
+    # Get progress docs for top corrected words
+    docs = []
+    if db:
+        docs = list(db['progress_assist'].find({"user_id": user_id}))
+    
+    # Temporary list to store all correct words (in order of appearance)
     correct_words_ordered = []
-
+    
     for doc in docs:
         incorrect_words = doc.get("incorrect_words", [])
         for word in incorrect_words:
             correct = word.get("correct")
             if correct:
                 correct_words_ordered.append(correct.lower().strip())  # Normalize
-
+    
     # Reverse the list so newest entries come first
     correct_words_ordered.reverse()
-
+    
     # Now pick unique words in this reversed order
     seen = set()
     unique_correct_words = []
@@ -507,15 +511,10 @@ def history():
         if word not in seen:
             unique_correct_words.append(word)
             seen.add(word)
-
+    
     # Get the top 10 most recent unique correct words
     top_10_unique_correct = unique_correct_words[:10]
-
-    # Display
-    # print("Top 10 Unique Corrected Words (Newest First)")
-    # print("=" * 45)
-    for word in top_10_unique_correct:
-        print(f"{word:>20}")
+    
     return render_template("history.html",
                            history_list=user_progress,
                            capability_score=capability_score,
