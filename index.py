@@ -677,13 +677,21 @@ def exercise(exercise_type):
         {"user": "goverment", "correct": "government"}
     ]
     user_id = session.get('user_id', 'guest')
-    user_documents = progress_collection.find({"user_id": user_id})
-
+    
+    # Get database connection
+    db = get_db()
     all_incorrect_words = []
-    for doc in user_documents:
-        incorrects = doc.get("incorrect_words", [])
-        all_incorrect_words.extend(incorrects)
-    print(all_incorrect_words)
+    
+    if db:
+        user_documents = db['progress_assist'].find({"user_id": user_id})
+        
+        for doc in user_documents:
+            incorrects = doc.get("incorrect_words", [])
+            all_incorrect_words.extend(incorrects)
+        print(all_incorrect_words)
+    else:
+        # Fallback for when DB is not available (e.g., on Vercel)
+        print("Database not available, using sample words only")
 
     if exercise_type == "spelling":
         return render_template("spelling_exercise.html", words=all_incorrect_words)
@@ -714,7 +722,14 @@ def submit(exercise_type):
         "exercise_type": exercise_type,
         "answers": answers
     }
-    mongo_db.exercise_logs.insert_one(result)
+    
+    # Get database connection
+    db = get_db()
+    if db:
+        db['exercise_logs'].insert_one(result)
+    else:
+        print("Database not available, skipping exercise logs")
+        
     return redirect(url_for('home'))
 
 if __name__ == '__main__':
