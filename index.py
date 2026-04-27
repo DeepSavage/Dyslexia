@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import re
 #import pyttsx3
 import random
-#import google.generativeai as genai
+import google.generativeai as genai
 
 # Import dictionary from dataset
 from dataset import DYSLEXIA_CORRECTIONS
@@ -378,7 +378,7 @@ def logout():
 
 
 
-# genai.configure(api_key='AIzaSyDtaqP73ub3cZ5L_VZAZHTrdnn3TP_b-Bk')
+genai.configure(api_key='AIzaSyDtaqP73ub3cZ5L_VZAZHTrdnn3TP_b-Bk')
 
 # engine = pyttsx3.init()
 
