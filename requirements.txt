@@ -9,3 +9,4 @@ openai-whisper
 language-tool-python
 scikit-learn
 pandas
+gunicorn
