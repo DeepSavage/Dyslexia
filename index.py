@@ -162,80 +162,33 @@ def correct_text(text, username):
     
     return final_corrected_text, errors
 
+# Disabled for Vercel deployment - too heavy
 def train_model():
-    data = pd.DataFrame({
-        'text': [
-            "I have truble with words", "I can read and write well",
-            "Speling is dificult", "Reading is easy",
-            "I confuse b and d", "I enjoy books",
-            "Words are hard for me", "Reading comes naturally",
-            "I mix up letters", "I love storytelling",
-            "Writing is challenging", "Books are my friends",
-            "Letters look jumbled", "I comprehend well",
-            "Dyslexia affects me", "I have no reading issues",
-            "Words dance on the page", "I read fluently",
-            "Spelling tests scare me", "I ace vocabulary tests",
-            "I strugle with reading", "Reading is effortless",
-            "Sentences confuse me", "I understand texts quickly",
-            "Puncuation is hard", "Grammar comes naturally"
-        ],
-        'label': ['Dyslexic', 'Not Dyslexic'] * 13
-    })
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.pipeline import make_pipeline
-    model = make_pipeline(TfidfVectorizer(max_features=100), RandomForestClassifier(n_estimators=200))
-    model.fit(data['text'], data['label'])
-    with open("dyslexia_model.pkl", "wb") as f:
-        pickle.dump(model, f)
-    return model
+    print("Model training disabled for Vercel deployment")
+    return None
 
 def load_model():
-    if not os.path.exists("dyslexia_model.pkl"):
-        return train_model()
-    with open("dyslexia_model.pkl", "rb") as f:
-        return pickle.load(f)
+    print("Model loading disabled for Vercel deployment")
+    return None
 
 def predict(text):
-    model = load_model()
-    return model.predict([text])[0]
+    # Simple rule-based prediction for Vercel deployment
+    dyslexia_indicators = ['truble', 'speling', 'dificult', 'confuse', 'mix', 'jumbled', 'dance', 'scare', 'strugle', 'puncuation']
+    text_lower = text.lower()
+    if any(indicator in text_lower for indicator in dyslexia_indicators):
+        return "Dyslexic"
+    else:
+        return "Not Dyslexic"
 
 def extract_text_from_image(image_file):
-    try:
-        # Convert image to format EasyOCR expects (can be PIL Image or path)
-        results = reader.readtext(image_file.read())
-        text = " ".join([res[1] for res in results])
-        return text
-    except Exception as e:
-        print(f"OCR error: {e}")
-        # Fallback to Tesseract if EasyOCR fails
-        try:
-            image_file.seek(0)
-            img = Image.open(image_file).convert("L")
-            text = pytesseract.image_to_string(img)
-            return text
-        except:
-            return None
+    # OCR disabled for Vercel deployment - too heavy
+    print("OCR functionality disabled for Vercel deployment")
+    return None
 
 def transcribe_audio(audio_file):
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            tmp.write(audio_file.read())
-            temp_path = tmp.name
-        
-        # Audio transcription should happen after the file is closed for Windows compatibility
-        result = whisper_model.transcribe(temp_path)
-        return result['text']
-    except Exception as e:
-        print(f"Transcription error: {e}")
-        return None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
+    # Audio transcription disabled for Vercel deployment - too heavy
+    print("Audio transcription disabled for Vercel deployment")
+    return None
 
 @app.route('/')
 def homeapp():
@@ -523,52 +476,13 @@ def history():
 
 @app.route('/generate_audio', methods=['POST'])
 def generate_audio():
-    data = request.get_json() or {}
-    rate = int(data.get('rate', 150))
-    
-    # Prioritize text sent from frontend, fallback to session or DB
-    text = data.get('text')
-    if not text:
-        user_id = session.get('user_id', 'guest')
-        progress = get_latest_progress(user_id)
-        text = (progress["reference_text"] if progress and progress.get("reference_text") else session.get('practice_paragraph', ''))
-    
-    if not text or not text.strip():
-        return jsonify({'error': 'No text provided for audio generation'}), 400
-
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
-            temp_path = temp_file.name
-        
-        engine.setProperty('rate', rate)
-        engine.save_to_file(text, temp_path)
-        engine.runAndWait()
-
-        with open(temp_path, 'rb') as f:
-            audio_base64 = base64.b64encode(f.read()).decode('utf-8')
-        os.remove(temp_path)
-        return jsonify({'audio': f'data:audio/wav;base64,{audio_base64}'})
-    except Exception as e:
-        print(f"Audio generation error: {e}")
-        return jsonify({'error': str(e)}), 500
+    # Text-to-speech disabled for Vercel deployment - too heavy
+    return jsonify({'error': 'Audio generation disabled for Vercel deployment'}), 400
 
 @app.route('/word_audio')
 def word_audio():
-    word = request.args.get('word', '')
-    if not word:
-        return jsonify({'error': 'No word provided'}), 400
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
-        temp_path = temp_file.name
-    
-    engine.setProperty('rate', 150)
-    engine.save_to_file(word, temp_path)
-    engine.runAndWait()
-
-    with open(temp_path, 'rb') as f:
-        audio_base64 = base64.b64encode(f.read()).decode('utf-8')
-    os.remove(temp_path)
-    return jsonify({'audio': f'data:audio/wav;base64,{audio_base64}'})
+    # Text-to-speech disabled for Vercel deployment - too heavy
+    return jsonify({'error': 'Word audio disabled for Vercel deployment'}), 400
 
 @app.route('/retrain', methods=['POST'])
 def retrain():
@@ -607,19 +521,8 @@ def compare_texts(user_text, reference_text):
 
 
     pronunciations = []
-    for word in incorrect_words:
-        if word['correct']:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
-                temp_path = temp_file.name
-            engine.save_to_file(f" {word['correct']}", temp_path)
-            engine.runAndWait()
-            with open(temp_path, 'rb') as f:
-                audio_base64 = base64.b64encode(f.read()).decode('utf-8')
-            os.remove(temp_path)
-            pronunciations.append({
-                'word': word['correct'],
-                'audio': f'data:audio/wav;base64,{audio_base64}'
-            })
+    # Audio pronunciations disabled for Vercel deployment
+    print("Audio pronunciations disabled for Vercel deployment")
 
     return incorrect_words, pronunciations
 

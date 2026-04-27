@@ -2,11 +2,4 @@ flask
 pymongo
 cryptography
 google-generativeai
-easyocr
-pillow
-pytesseract
-openai-whisper
-language-tool-python
-scikit-learn
-pandas
 gunicorn
