@@ -119,12 +119,27 @@
                 <label>Incorrect: enviroment →</label>
                 <input type="text" name="word5" data-correct="environment" />
             </div>
-            {% for i in range(5) %}
-                <div class="exercise-block">
-                    <label>Incorrect: {{ words[i].user }} →</label>
-                    <input type="text" name="word{{ i + 6 }}" data-correct="{{ words[i].correct }}" />
-                </div>
-            {% endfor %}
+{% for i in range(5) %}
+    {% if words|length > i %}
+        <div class="exercise-block">
+            <label>Incorrect: {{ words[i].user }} →</label>
+            <input type="text" name="word{{ i + 6 }}" data-correct="{{ words[i].correct }}" />
+        </div>
+    {% else %}
+        <!-- Use sample words when database words are not available -->
+        {% set sample_words = [
+            {"user": "recieve", "correct": "receive"},
+            {"user": "definately", "correct": "definitely"},
+            {"user": "seperate", "correct": "separate"},
+            {"user": "occurence", "correct": "occurrence"},
+            {"user": "goverment", "correct": "government"}
+        ] %}
+        <div class="exercise-block">
+            <label>Incorrect: {{ sample_words[i].user }} →</label>
+            <input type="text" name="word{{ i + 6 }}" data-correct="{{ sample_words[i].correct }}" />
+        </div>
+    {% endif %}
+{% endfor %}
             <button type="submit">✅ Check My Answers</button>
         </form>
         <div id="spellingResult" class="result"></div>
